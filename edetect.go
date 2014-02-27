@@ -1,7 +1,6 @@
 package edetect
 
 // #cgo LDFLAGS: -licuuc -licudata -licui18n
-// #include <stdio.h>
 // #include <stdlib.h>
 // #include <unicode/ucsdet.h>
 //
