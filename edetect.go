@@ -35,14 +35,6 @@ package edetect
 //
 //   return ucsms;
 // }
-// void* ucsd_supportedEncodings(UCharsetDetector* ucsd, void* slice, UErrorCode* u_err) {
-//   UEnumeration* uenum = ucsdet_getAllDetectableCharsets(ucsd, u_err);
-//   const char* result;
-//   int32_t resultLength;
-//   for (result = uenum_next(uenum, &resultLength, u_err); result != NULL; result = uenum_next(uenum, &resultLength, u_err)) {
-//   }
-//   return slice;
-// }
 //
 // int u_failure(UErrorCode u_err) {
 //   return U_FAILURE(u_err);
