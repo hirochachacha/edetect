@@ -2,8 +2,13 @@ package edetect
 
 import "testing"
 
+// import "io/ioutil"
+
 func Test(t *testing.T) {
-	input := "aa"
+	// input := []byte("aa")
+	input := []byte("ああ")
+	// input, _ := ioutil.ReadFile("/usr/bin/ls")
+
 	detector, err := Open()
 	if err != nil {
 		panic(err)
@@ -18,6 +23,7 @@ func Test(t *testing.T) {
 	println(charset.Name)
 	println(charset.Confidence)
 	println(charset.Language)
+	println(charset.Mime)
 
 	println("detectAll")
 
@@ -29,6 +35,7 @@ func Test(t *testing.T) {
 		println(charset.Name)
 		println(charset.Confidence)
 		println(charset.Language)
+		println(charset.Mime)
 	}
 
 	encodings, err := detector.SupportedEncodings()

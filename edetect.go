@@ -1,7 +1,8 @@
 package edetect
 
-// #cgo LDFLAGS: -licuuc -licudata -licui18n
+// #cgo LDFLAGS: -licuuc -licudata -licui18n -lmagic
 // #include <stdlib.h>
+// #include <magic.h>
 // #include <unicode/ucsdet.h>
 //
 // const UCharsetMatch* ucsd_run(UCharsetDetector* ucsd, const char* input, size_t input_len, UErrorCode* u_err) {
@@ -45,18 +46,21 @@ import "unsafe"
 import "errors"
 import "runtime"
 import "reflect"
+import "strings"
 
 type Charset struct {
 	Name       string
 	Confidence int
 	Language   string
+	Mime       string
 }
 
 type Detector struct {
-	ucsd *C.UCharsetDetector
+	ucsd  *C.UCharsetDetector
+	magic C.magic_t
 }
 
-func Open() (*Detector, error) {
+func ucsdOpen() (*C.UCharsetDetector, error) {
 	uErr := C.UErrorCode(C.U_ZERO_ERROR)
 	ucsd, err := C.ucsdet_open(&uErr)
 	if err != nil {
@@ -65,8 +69,63 @@ func Open() (*Detector, error) {
 	if err = uErrorToGoError(uErr); err != nil {
 		return nil, err
 	}
+	return ucsd, nil
+}
 
-	detector := &Detector{ucsd}
+func magicError(magic C.magic_t) error {
+	errorStr, err := C.magic_error(magic)
+	if err != nil {
+		// hope it unreachable!
+		panic("unreachable")
+	}
+	if errorStr == nil {
+		return nil
+	}
+	return errors.New(C.GoString(errorStr))
+}
+
+func magicOpen() (C.magic_t, error) {
+	magic, err := C.magic_open(C.MAGIC_MIME_TYPE)
+	if err != nil {
+		return nil, err
+	}
+	if magic == nil {
+		err = magicError(magic)
+		if err == nil {
+			panic("unreachable")
+		}
+		return nil, err
+	}
+
+	// magic_load set ENOENT, even if it succeed,
+	// so ignore second value.
+	code, _ := C.magic_load(magic, nil)
+	if int(code) != 0 {
+		err = magicError(magic)
+		if err == nil {
+			panic("unreachable")
+		}
+		return nil, err
+	}
+
+	return magic, nil
+}
+
+func Open() (*Detector, error) {
+	ucsd, err := ucsdOpen()
+	if err != nil {
+		return nil, err
+	}
+
+	magic, err := magicOpen()
+	if err != nil {
+		return nil, err
+	}
+
+	detector := &Detector{
+		ucsd:  ucsd,
+		magic: magic,
+	}
 
 	runtime.SetFinalizer(detector, func(detector *Detector) {
 		detector.Close()
@@ -76,8 +135,13 @@ func Open() (*Detector, error) {
 }
 
 func (detector *Detector) Close() error {
-	_, err := C.ucsdet_close(detector.ucsd)
-	return err
+	_, err1 := C.ucsdet_close(detector.ucsd)
+	_, err2 := C.magic_close(detector.magic)
+
+	if err1 != nil {
+		return err1
+	}
+	return err2
 }
 
 func (detector *Detector) EnableInputFilter(filter bool) (bool, error) {
@@ -157,13 +221,37 @@ func (detector *Detector) SupportedEncodings() ([]string, error) {
 	return encodings, nil
 }
 
-func (detector *Detector) Run(input string) (*Charset, error) {
-	cinput := C.CString(input)
-	defer C.free(unsafe.Pointer(cinput))
+func (detector *Detector) detectMime(cinput *C.char, cinputLen C.size_t) (string, error) {
+	// magic_buffer set EINVAL, even if it succeed(binary?),
+	// so ignore second value.
+	mimeStr, _ := C.magic_buffer(detector.magic, unsafe.Pointer(cinput), cinputLen)
+	if mimeStr == nil {
+		err := magicError(detector.magic)
+		if err == nil {
+			panic("unreachable")
+		}
+		return "", err
+	}
+	return C.GoString(mimeStr), nil
+}
+
+func (detector *Detector) Run(input []byte) (*Charset, error) {
+	cinput := (*C.char)(unsafe.Pointer(&input[0]))
+
+	cinputLen := C.size_t(len(input))
+
+	mime, err := detector.detectMime(cinput, cinputLen)
+	if err != nil {
+		return nil, err
+	}
+
+	if !strings.HasPrefix(mime, "text") {
+		return makeCharset(nil, mime)
+	}
 
 	uErr := C.UErrorCode(C.U_ZERO_ERROR)
 
-	uCharsetMatch, err := C.ucsd_run(detector.ucsd, cinput, C.size_t(len(input)), &uErr)
+	uCharsetMatch, err := C.ucsd_run(detector.ucsd, (*C.char)(cinput), cinputLen, &uErr)
 	if err != nil {
 		return nil, err
 	}
@@ -171,23 +259,32 @@ func (detector *Detector) Run(input string) (*Charset, error) {
 		return nil, err
 	}
 
-	charset, err := uCharsetMatchToGoCharset(uCharsetMatch)
+	return makeCharset(uCharsetMatch, mime)
+}
+
+func (detector *Detector) RunAll(input []byte) ([]*Charset, error) {
+	cinput := (*C.char)(unsafe.Pointer(&input[0]))
+
+	cinputLen := C.size_t(len(input))
+
+	mime, err := detector.detectMime(cinput, cinputLen)
 	if err != nil {
 		return nil, err
 	}
 
-	return charset, nil
-}
-
-func (detector *Detector) RunAll(input string) ([]*Charset, error) {
-	cinput := C.CString(input)
-	defer C.free(unsafe.Pointer(cinput))
+	if !strings.HasPrefix(mime, "text") {
+		charset, err := makeCharset(nil, mime)
+		if err != nil {
+			return nil, err
+		}
+		return []*Charset{charset}, nil
+	}
 
 	uErr := C.UErrorCode(C.U_ZERO_ERROR)
 
 	var matchesFound C.int32_t
 
-	uCharsetMatches, err := C.ucsd_runAll(detector.ucsd, &matchesFound, cinput, C.size_t(len(input)), &uErr)
+	uCharsetMatches, err := C.ucsd_runAll(detector.ucsd, &matchesFound, (*C.char)(cinput), cinputLen, &uErr)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +303,7 @@ func (detector *Detector) RunAll(input string) ([]*Charset, error) {
 	sliceHeader.Data = uintptr(unsafe.Pointer(uCharsetMatches))
 
 	for _, uCharsetMatch := range umatches {
-		charset, err := uCharsetMatchToGoCharset(uCharsetMatch)
+		charset, err := makeCharset(uCharsetMatch, mime)
 		if err != nil {
 			return nil, err
 		}
@@ -231,7 +328,14 @@ func uErrorToGoError(uErr C.UErrorCode) error {
 	return errors.New(errStr)
 }
 
-func uCharsetMatchToGoCharset(uCharsetMatch *C.UCharsetMatch) (*Charset, error) {
+func makeCharset(uCharsetMatch *C.UCharsetMatch, mime string) (*Charset, error) {
+	if uCharsetMatch == nil {
+		charset := &Charset{
+			Confidence: 100,
+			Mime:       mime,
+		}
+		return charset, nil
+	}
 	uErr := C.UErrorCode(C.U_ZERO_ERROR)
 
 	cname, err := C.ucsdet_getName(uCharsetMatch, &uErr)
@@ -262,6 +366,7 @@ func uCharsetMatchToGoCharset(uCharsetMatch *C.UCharsetMatch) (*Charset, error) 
 		Name:       C.GoString(cname),
 		Confidence: int(cconfidence),
 		Language:   C.GoString(clang),
+		Mime:       mime,
 	}
 	return charset, nil
 }
