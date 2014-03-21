@@ -5,8 +5,9 @@ import "testing"
 // import "io/ioutil"
 
 func Test(t *testing.T) {
-	// input := []byte("aa")
-	input := []byte("ああ")
+	// input := []byte("hello world")
+	// input := make([]byte, 0)
+	input := []byte("こんにちは世界")
 	// input, _ := ioutil.ReadFile("/usr/bin/ls")
 
 	detector, err := Open()

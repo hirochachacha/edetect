@@ -48,6 +48,24 @@ import "runtime"
 import "reflect"
 import "strings"
 
+var ErrEmptyInput = errors.New("edetect: can't use empty string as input")
+
+type MagicError struct {
+	s string
+}
+
+func (err *MagicError) Error() string {
+	return err.s
+}
+
+type UError struct {
+	s string
+}
+
+func (err *UError) Error() string {
+	return err.s
+}
+
 type Charset struct {
 	Name       string
 	Confidence int
@@ -81,7 +99,7 @@ func magicError(magic C.magic_t) error {
 	if errorStr == nil {
 		return nil
 	}
-	return errors.New(C.GoString(errorStr))
+	return &MagicError{C.GoString(errorStr)}
 }
 
 func magicOpen() (C.magic_t, error) {
@@ -236,6 +254,10 @@ func (detector *Detector) detectMime(cinput *C.char, cinputLen C.size_t) (string
 }
 
 func (detector *Detector) Run(input []byte) (*Charset, error) {
+	if len(input) == 0 {
+		return nil, ErrEmptyInput
+	}
+
 	cinput := (*C.char)(unsafe.Pointer(&input[0]))
 
 	cinputLen := C.size_t(len(input))
@@ -263,6 +285,10 @@ func (detector *Detector) Run(input []byte) (*Charset, error) {
 }
 
 func (detector *Detector) RunAll(input []byte) ([]*Charset, error) {
+	if len(input) == 0 {
+		return nil, ErrEmptyInput
+	}
+
 	cinput := (*C.char)(unsafe.Pointer(&input[0]))
 
 	cinputLen := C.size_t(len(input))
@@ -325,7 +351,7 @@ func uErrorToGoError(uErr C.UErrorCode) error {
 
 	cerrStr := C.u_errorName(uErr)
 	errStr := C.GoString(cerrStr)
-	return errors.New(errStr)
+	return &UError{errStr}
 }
 
 func makeCharset(uCharsetMatch *C.UCharsetMatch, mime string) (*Charset, error) {
